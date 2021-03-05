@@ -159,7 +159,7 @@ function parseall(str)
         push!(exs, ex)
     end
     if length(exs) == 0
-        throw(ParseError("end of input"))
+        throw(Base.ParseError("end of input"))
     elseif length(exs) == 1
         return exs[1]
     else
@@ -191,10 +191,10 @@ function replace_expressions(markdown::Markdown.Code, context; eval_julia_code=f
             result[] = render_result(evaled)
         end
         return md"""
-            $(markdown)
-            $(run)
-            $(result)
-            """
+        $(markdown)
+        $(run)
+        $(result)
+        """
     else
         return markdown
     end

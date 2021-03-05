@@ -18,15 +18,43 @@ end
 Update the value of an observable, without sending changes to the JS frontend.
 This will be used to update updates from the forntend.
 """
-function update_nocycle!(obs::Observable, value)
-    setindex!(obs, value, notify = (f-> !(f isa JSUpdateObservable)))
+function update_nocycle!(obs::Observable, @nospecialize(value))
+    obs.val = value
+    for f in Observables.listeners(obs)
+        if !(f isa JSUpdateObservable)
+            Base.invokelatest(f, value)
+        end
+    end
+    return
 end
 
 function jsrender(session::Session, obs::Observable)
-    html = map(obs) do data
+    html = map(session, obs) do data
         repr_richest(jsrender(session, data))
     end
     dom = DOM.m_unesc("span", html[])
-    onjs(session, html, js"(html)=> update_dom_node($(dom), html)")
+    onjs(session, html, js"(html)=> JSServe.update_dom_node($(dom), html)")
     return dom
+end
+
+# on & map versions that deregister when session closes!
+function Observables.on(f, session::Session, observable::Observable)
+    to_deregister = on(f, observable)
+    push!(session.deregister_callbacks, to_deregister)
+    return to_deregister
+end
+
+function Observables.onany(f, session::Session, observables::Observable...)
+    to_deregister = onany(f, observables...)
+    append!(session.deregister_callbacks, to_deregister)
+    return to_deregister
+end
+
+function Base.map(f, session::Session, observables::Observable...; result=Observable{Any}())
+    # map guarantees to be run upfront!
+    result[] = f(Observables.to_value.(observables)...)
+    onany(session, observables...) do newvals...
+        result[] = f(newvals...)
+    end
+    return result
 end

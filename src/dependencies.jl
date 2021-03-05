@@ -94,6 +94,42 @@ function Dependency(name::Symbol, urls::AbstractVector)
     return Dependency(name, Asset.(urls), Dict{Symbol, JSCode}())
 end
 
+"""
+    construct_arguments(args, keyword_arguments)
+Constructs the arguments for a JS call.
+Can only use either keyword arguments or positional arguments.
+"""
+function construct_arguments(args, keyword_arguments)
+    if isempty(keyword_arguments)
+        return args
+    elseif isempty(args)
+        # tojs isn't recursive bug:
+        return keyword_arguments
+    else
+        # TODO: I'm not actually sure about this :D
+        error("""
+        Javascript only supports keyword arguments OR arguments.
+        Found posititional arguments and keyword arguments
+        """)
+    end
+end
+
+"""
+Implement to call functions in a Dependency:
+const Three = Dependency(...)
+Three.camera(session, args...; kw...)
+"""
+function Base.getproperty(dependency::Dependency, func_name::Symbol)
+    func_name in (:name, :assets, :function) && return getfield(dependency, func_name)
+    func_name_js = JSString(string(func_name))
+    return function (session::Session, args...; kw...)
+        args = construct_arguments(args, kw)
+        evaljs(session, js"""
+            $(dependency).$(func_name_js)(...$(args))
+        """)
+    end
+end
+
 # With this, one can just put a dependency anywhere in the dom to get loaded
 function jsrender(session::Session, x::Dependency)
     push!(session, x)
@@ -105,29 +141,37 @@ function jsrender(session::Session, asset::Asset)
     return nothing
 end
 
-const JSCallLibLocal = Asset(dependency_path("core.js"))
-
-const MsgPackLib = Asset(dependency_path("msgpack.min.js"))
-
-const MarkdownCSS = Asset(dependency_path("markdown.css"))
-
 function include_asset(asset::Asset, serializer::UrlSerializer=UrlSerializer())
-    file_url = repr(url(asset, serializer))
+    function to_url(mime)
+        # In case we don't rely on a running server,
+        # we base64 encode the content in a data url
+        # This isn't needed, if the asset is already hosted online (!isempty(asset.online_path))
+        if serializer.inline_all && isempty(asset.online_path)
+            data_str = base64encode(read(asset.local_path))
+            return "data:$(mime);base64," * data_str
+        else
+            return url(asset, serializer)
+        end
+    end
     if mediatype(asset) == :js
-        return "<script src=$(file_url)></script>"
+        return DOM.script(src=to_url("text/javascript"))
     elseif mediatype(asset) == :css
-        return "<link href=$(file_url) rel=\"stylesheet\" type=\"text/css\">"
+        return DOM.link(href=to_url("text/css"), rel="stylesheet", type="text/css")
     else
         error("Unrecognized asset media type: $(mediatype(asset))")
     end
 end
 
-function include_asset(assets::Set{Asset}, serializer::UrlSerializer=UrlSerializer())
-    return sprint() do io
-        for asset in assets
-            println(io, include_asset(asset, serializer))
-        end
+function include_asset(dep::Dependency, serializer::UrlSerializer=UrlSerializer())
+    if length(dep.assets) == 1
+        include_asset(dep.assets[1], serializer)
+    else
+        return include_asset(dep.assets, serializer)
     end
+end
+
+function include_asset(assets::Union{Vector{Asset}, Set{Asset}}, serializer::UrlSerializer=UrlSerializer())
+    return DOM.div(include_asset.(assets, (serializer,))...)
 end
 
 function url(str::String, serializer::UrlSerializer=UrlSerializer())
@@ -185,3 +229,13 @@ function url(asset::Asset, serializer::UrlSerializer=UrlSerializer())
         return asset.online_path
     end
 end
+
+
+const MsgPackLib = Asset(dependency_path("msgpack.min.js"))
+const PakoLib = Asset(dependency_path("pako_inflate.min.js"))
+const JSServeLib = Dependency(:JSServe, [dependency_path("JSServe.js")])
+const Base64Lib = Dependency(:Base64, [dependency_path("Base64.js")])
+
+const MarkdownCSS = Asset(dependency_path("markdown.css"))
+const TailwindCSS = Asset(dependency_path("tailwind.min.css"))
+const Styling = Asset(dependency_path("styled.css"))
